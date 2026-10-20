@@ -1,7 +1,7 @@
 ## OpenWrt 25.12
 
 ### General Info
-- Based on openwrt 25.12.5
+- Based on openwrt 25.12.6
 
 ### Notes
 - For R2S, theres almost no difference with official builds, except the preinstalled package set
@@ -27,4 +27,5 @@
 
 ### Changelog
 - [2026-06-22] Initial OpenWrt 25.12.4
-- [2026-10-11] Initial OpenWrt 25.12.5
+- [2026-10-11] OpenWrt 25.12.5
+- [2026-10-20] OpenWrt 25.12.6
