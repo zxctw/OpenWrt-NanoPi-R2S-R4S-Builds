@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: hmz007 <hmz007@gmail.com>
+Date: Wed, 30 Sep 2026 20:26:19 +0200
+Subject: [PATCH] arm64: rk3399: r4s: disable nodes for vopb/vopl
+
+The NanoPi R4S has no display output, disable vopb and vopl to fix:
+  rk3399_vop vop@ff8f0000: failed to get ahb reset (ret=-524)
+
+Signed-off-by: hmz007 <hmz007@gmail.com>
+[ported to U-Boot 2025.10: moved to rk3399-nanopi-r4s-u-boot.dtsi]
+---
+ arch/arm/dts/rk3399-nanopi-r4s-u-boot.dtsi | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+--- a/arch/arm/dts/rk3399-nanopi-r4s-u-boot.dtsi
++++ b/arch/arm/dts/rk3399-nanopi-r4s-u-boot.dtsi
+@@ -41,3 +41,19 @@
+ 	phy-supply = <&vdd_5v>;
+ 	status = "okay";
+ };
++
++&vopb {
++	status = "disabled";
++};
++
++&vopb_mmu {
++	status = "disabled";
++};
++
++&vopl {
++	status = "disabled";
++};
++
++&vopl_mmu {
++	status = "disabled";
++};

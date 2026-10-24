@@ -1,0 +1,377 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jensen Huang <jensenhuang@friendlyarm.com>
+Date: Wed, 30 Sep 2026 20:25:49 +0200
+Subject: [PATCH] rockchip: rk3399: split nanopi-r4s out of evb_rk3399
+
+Add a NanoPi 4 series board target that detects the board revision
+(GPIO4_D0/D1 + SARADC channel 4) and selects the matching DDR
+parameters in TPL, so that the NanoPi R4S 1GB (DDR3) boots next to
+the 4GB (LPDDR4) variant.
+
+Signed-off-by: Jensen Huang <jensenhuang@friendlyarm.com>
+[ported to U-Boot 2025.10: use generic rockchip misc_init_r() for
+ cpuid/MAC, set SARADC clock through the clk API, drop ATAG defines]
+---
+ arch/arm/dts/rk3399-nanopi-r4s-u-boot.dtsi |   2 +
+ arch/arm/mach-rockchip/rk3399/Kconfig      |   6 +
+ board/friendlyarm/nanopi4/Kconfig          |  15 ++
+ board/friendlyarm/nanopi4/MAINTAINERS      |   6 +
+ board/friendlyarm/nanopi4/Makefile         |   8 +
+ board/friendlyarm/nanopi4/hwrev.c          | 196 +++++++++++++++++++++
+ board/friendlyarm/nanopi4/hwrev.h          |  13 ++
+ board/friendlyarm/nanopi4/nanopi4.c        |  22 +++
+ configs/nanopi-r4s-rk3399_defconfig        |   2 +-
+ include/configs/nanopi4.h                  |  19 ++
+ 10 files changed, 288 insertions(+), 1 deletion(-)
+ create mode 100644 board/friendlyarm/nanopi4/Kconfig
+ create mode 100644 board/friendlyarm/nanopi4/MAINTAINERS
+ create mode 100644 board/friendlyarm/nanopi4/Makefile
+ create mode 100644 board/friendlyarm/nanopi4/hwrev.c
+ create mode 100644 board/friendlyarm/nanopi4/hwrev.h
+ create mode 100644 board/friendlyarm/nanopi4/nanopi4.c
+ create mode 100644 include/configs/nanopi4.h
+
+--- a/arch/arm/dts/rk3399-nanopi-r4s-u-boot.dtsi
++++ b/arch/arm/dts/rk3399-nanopi-r4s-u-boot.dtsi
+@@ -14,6 +14,8 @@
+ 
+ #include "rk3399-nanopi4-u-boot.dtsi"
+ #include "rk3399-sdram-lpddr4-100.dtsi"
++#include "rk3399-sdram-lpddr3-samsung-4GB-1866.dtsi"
++#include "rk3399-sdram-ddr3-1866.dtsi"
+ 
+ / {
+ 	smbios {
+--- a/arch/arm/mach-rockchip/rk3399/Kconfig
++++ b/arch/arm/mach-rockchip/rk3399/Kconfig
+@@ -30,6 +30,11 @@ config TARGET_EVB_RK3399
+ 	  with full function and physical connectors support like Type-C ports,
+ 	  USB.0 host ports, LVDS, JTAG, MAC, SD card, HDMI, USB-to-serial...
+ 
++config TARGET_NANOPI4
++	bool "FriendlyElec NanoPi 4 Series"
++	help
++	  Support for FriendlyElec boards based on RK3399.
++
+ config TARGET_PINEBOOK_PRO_RK3399
+ 	bool "Pinebook Pro"
+ 	help
+@@ -161,6 +166,7 @@ config SYS_BOOTCOUNT_ADDR
+ endif # BOOTCOUNT_LIMIT
+ 
+ source "board/firefly/roc-pc-rk3399/Kconfig"
++source "board/friendlyarm/nanopi4/Kconfig"
+ source "board/google/gru/Kconfig"
+ source "board/pine64/pinebook-pro-rk3399/Kconfig"
+ source "board/pine64/pinephone-pro-rk3399/Kconfig"
+--- /dev/null
++++ b/board/friendlyarm/nanopi4/Kconfig
+@@ -0,0 +1,15 @@
++if TARGET_NANOPI4
++
++config SYS_BOARD
++	default "nanopi4"
++
++config SYS_VENDOR
++	default "friendlyarm"
++
++config SYS_CONFIG_NAME
++	default "nanopi4"
++
++config BOARD_SPECIFIC_OPTIONS # dummy
++	def_bool y
++
++endif
+--- /dev/null
++++ b/board/friendlyarm/nanopi4/MAINTAINERS
+@@ -0,0 +1,6 @@
++NanoPi 4 Series
++M:	<support@friendlyarm.com>
++S:	Maintained
++F:	board/friendlyarm/nanopi4/
++F:	include/configs/nanopi4.h
++F:	configs/nanopi-r4s-rk3399_defconfig
+--- /dev/null
++++ b/board/friendlyarm/nanopi4/Makefile
+@@ -0,0 +1,8 @@
++#
++# Copyright (C) Guangzhou FriendlyELEC Computer Tech. Co., Ltd.
++# (http://www.friendlyarm.com)
++#
++# SPDX-License-Identifier:     GPL-2.0+
++#
++
++obj-y	+= nanopi4.o hwrev.o
+--- /dev/null
++++ b/board/friendlyarm/nanopi4/hwrev.c
+@@ -0,0 +1,196 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Copyright (c) 2020 FriendlyElec Computer Tech. Co., Ltd.
++ * (http://www.friendlyarm.com)
++ */
++
++#include <clk.h>
++#include <dm.h>
++#include <log.h>
++#include <linux/delay.h>
++#include <asm/io.h>
++#include <asm/arch-rockchip/gpio.h>
++#include <dt-bindings/clock/rk3399-cru.h>
++
++#include "hwrev.h"
++
++/*
++ * ID info:
++ *  ID : Volts : ADC value :   Bucket
++ *  ==   =====   =========   ===========
++ *   0 : 0.102V:        58 :    0 -   81
++ *   1 : 0.211V:       120 :   82 -  150
++ *   2 : 0.319V:       181 :  151 -  211
++ *   3 : 0.427V:       242 :  212 -  274
++ *   4 : 0.542V:       307 :  275 -  342
++ *   5 : 0.666V:       378 :  343 -  411
++ *   6 : 0.781V:       444 :  412 -  477
++ *   7 : 0.900V:       511 :  478 -  545
++ *   8 : 1.023V:       581 :  546 -  613
++ *   9 : 1.137V:       646 :  614 -  675
++ *  10 : 1.240V:       704 :  676 -  733
++ *  11 : 1.343V:       763 :  734 -  795
++ *  12 : 1.457V:       828 :  796 -  861
++ *  13 : 1.576V:       895 :  862 -  925
++ *  14 : 1.684V:       956 :  926 -  989
++ *  15 : 1.800V:      1023 :  990 - 1023
++ */
++static const int id_readings[] = {
++	 81, 150, 211, 274, 342, 411, 477, 545,
++	613, 675, 733, 795, 861, 925, 989, 1023
++};
++
++static int cached_board_id = -1;
++
++#define SARADC_BASE		0xFF100000
++#define SARADC_DATA		(SARADC_BASE + 0)
++#define SARADC_CTRL		(SARADC_BASE + 8)
++
++static u32 get_saradc_value(int chn)
++{
++	int timeout = 0;
++	u32 adc_value = 0;
++
++	writel(0, SARADC_CTRL);
++	udelay(2);
++
++	writel(0x28 | chn, SARADC_CTRL);
++	udelay(50);
++
++	timeout = 0;
++	do {
++		if (readl(SARADC_CTRL) & 0x40) {
++			adc_value = readl(SARADC_DATA) & 0x3FF;
++			goto stop_adc;
++		}
++
++		udelay(10);
++	} while (timeout++ < 100);
++
++stop_adc:
++	writel(0, SARADC_CTRL);
++
++	return adc_value;
++}
++
++static uint32_t get_adc_index(int chn)
++{
++	int i;
++	int adc_reading;
++
++	if (cached_board_id != -1)
++		return cached_board_id;
++
++	adc_reading = get_saradc_value(chn);
++	for (i = 0; i < ARRAY_SIZE(id_readings); i++) {
++		if (adc_reading <= id_readings[i]) {
++			debug("ADC reading %d, ID %d\n", adc_reading, i);
++			cached_board_id = i;
++			return i;
++		}
++	}
++
++	/* should die for impossible value */
++	return 0;
++}
++
++/*
++ * Board revision list: <GPIO4_D1 | GPIO4_D0>
++ *  0b00 - NanoPC-T4
++ *  0b01 - NanoPi M4
++ *
++ * Extended by ADC_IN4
++ * Group A:
++ *  0x04 - NanoPi NEO4
++ *  0x06 - SOC-RK3399
++ *  0x07 - SOC-RK3399 V2
++ *  0x09 - NanoPi R4S 1GB
++ *  0x0A - NanoPi R4S 4GB
++ *  0x0B - NanoPi R4SE
++ *
++ * Group B:
++ *  0x21 - NanoPi M4 Ver2.0
++ *  0x22 - NanoPi M4B
++ */
++static int pcb_rev = -1;
++
++void bd_hwrev_init(void)
++{
++#define GPIO4_BASE	0xff790000
++	struct rockchip_gpio_regs *regs = (void *)GPIO4_BASE;
++
++	if (pcb_rev >= 0)
++		return;
++
++#ifdef CONFIG_XPL_BUILD
++	{
++		struct udevice *dev;
++		struct clk clk;
++
++		/* probe the CRU (rkclk_init) and clock the SARADC at 1MHz */
++		if (uclass_get_device_by_driver(UCLASS_CLK,
++						DM_DRIVER_GET(clk_rk3399), &dev))
++			return;
++
++		clk.dev = dev;
++		clk.id = SCLK_SARADC;
++		clk_set_rate(&clk, 1000000);
++	}
++#endif
++
++	/* D1, D0: input mode */
++	clrbits_le32(&regs->swport_ddr, (0x3 << 24));
++	pcb_rev = (readl(&regs->ext_port) >> 24) & 0x3;
++
++	if (pcb_rev == 0x3) {
++		/* Revision group A: 0x04 ~ 0x13 */
++		pcb_rev = 0x4 + get_adc_index(4);
++
++	} else if (pcb_rev == 0x1) {
++		int idx = get_adc_index(4);
++
++		/* Revision group B: 0x21 ~ 0x2f */
++		if (idx > 0)
++			pcb_rev = 0x20 + idx;
++	}
++}
++
++#ifdef CONFIG_XPL_BUILD
++static struct board_ddrtype {
++	int rev;
++	const char *type;
++} ddrtypes[] = {
++	{ 0x00, "lpddr3-samsung-4GB-1866" },
++	{ 0x01, "lpddr3-samsung-4GB-1866" },
++	{ 0x04,   "ddr3-1866" },
++	{ 0x06,   "ddr3-1866" },
++	{ 0x07, "lpddr4-100"  },
++	{ 0x09,   "ddr3-1866" },
++	{ 0x0a, "lpddr4-100"  },
++	{ 0x0b, "lpddr4-100"  },
++	{ 0x21, "lpddr4-100"  },
++	{ 0x22,   "ddr3-1866" },
++};
++
++/* Overrides the __weak symbol in drivers/ram/rockchip/sdram_rk3399.c */
++const char *rk3399_get_ddrtype(void)
++{
++	int i;
++
++	bd_hwrev_init();
++	printf("Board: rev%02x\n", pcb_rev);
++
++	for (i = 0; i < ARRAY_SIZE(ddrtypes); i++) {
++		if (ddrtypes[i].rev == pcb_rev)
++			return ddrtypes[i].type;
++	}
++
++	/* fallback to first subnode (ie, first included dtsi) */
++	return NULL;
++}
++#endif
++
++u32 get_board_rev(void)
++{
++	return pcb_rev;
++}
+--- /dev/null
++++ b/board/friendlyarm/nanopi4/hwrev.h
+@@ -0,0 +1,13 @@
++/* SPDX-License-Identifier: GPL-2.0+ */
++/*
++ * Copyright (C) Guangzhou FriendlyARM Computer Tech. Co., Ltd.
++ * (http://www.friendlyarm.com)
++ */
++
++#ifndef __BD_HW_REV_H__
++#define __BD_HW_REV_H__
++
++void bd_hwrev_init(void);
++u32 get_board_rev(void);
++
++#endif /* __BD_HW_REV_H__ */
+--- /dev/null
++++ b/board/friendlyarm/nanopi4/nanopi4.c
+@@ -0,0 +1,22 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Copyright (c) 2020 FriendlyElec Computer Tech. Co., Ltd.
++ * (http://www.friendlyarm.com)
++ */
++
++#include <init.h>
++#include <stdio.h>
++#include <linux/types.h>
++
++#include "hwrev.h"
++
++#ifndef CONFIG_XPL_BUILD
++/* Called by misc_init_r() in arch/arm/mach-rockchip/board.c */
++int rockchip_early_misc_init_r(void)
++{
++	bd_hwrev_init();
++	printf("Board: rev%02x\n", get_board_rev());
++
++	return 0;
++}
++#endif
+--- a/configs/nanopi-r4s-rk3399_defconfig
++++ b/configs/nanopi-r4s-rk3399_defconfig
+@@ -9,7 +9,7 @@ CONFIG_DEFAULT_DEVICE_TREE="rockchip/rk3
+ CONFIG_DM_RESET=y
+ CONFIG_ROCKCHIP_RK3399=y
+ CONFIG_SPL_DRIVERS_MISC=y
+-CONFIG_TARGET_EVB_RK3399=y
++CONFIG_TARGET_NANOPI4=y
+ CONFIG_SYS_LOAD_ADDR=0x800800
+ CONFIG_DEBUG_UART_BASE=0xFF1A0000
+ CONFIG_DEBUG_UART_CLOCK=24000000
+--- /dev/null
++++ b/include/configs/nanopi4.h
+@@ -0,0 +1,19 @@
++/* SPDX-License-Identifier: GPL-2.0+ */
++/*
++ * Copyright (C) Guangzhou FriendlyELEC Computer Tech. Co., Ltd.
++ * (http://www.friendlyarm.com)
++ *
++ * (C) Copyright 2016 Rockchip Electronics Co., Ltd
++ */
++
++#ifndef __CONFIG_NANOPI4_H__
++#define __CONFIG_NANOPI4_H__
++
++#define ROCKCHIP_DEVICE_SETTINGS \
++		"stdin=serial,usbkbd\0" \
++		"stdout=serial,vidconsole\0" \
++		"stderr=serial,vidconsole\0"
++
++#include <configs/rk3399_common.h>
++
++#endif
