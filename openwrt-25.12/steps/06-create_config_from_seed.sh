@@ -27,3 +27,18 @@ if [[ "$1" == "R2C" ]]; then
 fi
 
 make defconfig
+
+# Enable Traditional Chinese for LuCI
+sed -i \
+    -e '/^CONFIG_LUCI_LANG_zh_TW=/d' \
+    -e '/^# CONFIG_LUCI_LANG_zh_TW is not set$/d' \
+    -e '/^CONFIG_LUCI_LANG_zh_Hant=/d' \
+    -e '/^# CONFIG_LUCI_LANG_zh_Hant is not set$/d' \
+    -e '/^CONFIG_PACKAGE_luci-i18n-base-zh-tw=/d' \
+    -e '/^# CONFIG_PACKAGE_luci-i18n-base-zh-tw is not set$/d' \
+    .config
+
+echo 'CONFIG_LUCI_LANG_zh_Hant=y' >> .config
+echo 'CONFIG_PACKAGE_luci-i18n-base-zh-tw=y' >> .config
+
+make defconfig
