@@ -1,0 +1,11 @@
+#!/bin/sh
+
+uci -q batch <<EOF
+  set network.lan.ipaddr='192.168.10.1/24'
+  commit network
+EOF
+
+# 新版 OpenWrt 建議加上此行，確保開機後期能正確重載生效
+/etc/init.d/network reload
+
+exit 0
