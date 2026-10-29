@@ -124,6 +124,17 @@ jobs:
     
     - name: Make working copy of OpenWrt source
       run: ./openwrt-$OPENWRT_BRANCH/steps/02_prepare_openwrt_folder.sh
+      
+    - name: Copy custom files
+      run: |
+        mkdir -p build/openwrt/files/etc/uci-defaults
+        if [ -d "files" ] && [ "$(ls -A files)" ]; then
+          cp -r files/* build/openwrt/files/
+        fi
+
+        if [ -d "build/openwrt/files/etc/uci-defaults" ]; then
+          chmod +x build/openwrt/files/etc/uci-defaults/*
+        fi
     
     - name: Patch OpenWrt Source
       run: ./openwrt-$OPENWRT_BRANCH/steps/03_patch_openwrt.sh
